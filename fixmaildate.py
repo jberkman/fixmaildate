@@ -47,60 +47,62 @@ you could just recreate your account. Maybe there's a better way.
 
 from email.parser import Parser
 from email.utils import parsedate_tz, mktime_tz
-from datetime import datetime
-import os, sys
+import os
+import sys
+import re
+import logging
 
-def fixDir(dname):
+
+def fix_dir(dname):
+    """ Parse the headers and fix the file stamp and name """
     for fname in os.listdir(dname):
         fname = os.path.join(dname, fname)
-        fp = open(fname)
-        msg = Parser().parse(fp, True)
-        if 'Date' in msg:
-            date = parsedate_tz(msg['Date'])
+        file_path = open(fname, encoding="ISO-8859-1")
+        msg = Parser().parse(file_path, True)
+        if 'Date' in str(msg):
+            date = parsedate_tz(str(msg['Date']))
             if date:
-                # Ok I had some old emails with messed up Date headers as so:
-                # Date: Sun, 22 Aug US/E 13:01:00 -0400
-                # I knew these were briefly from '99-'00 so I manually fix that here.
-                '''
-                if date[0] < 1900:
-                    if date[1] < 3:
-                        year = 2000
-                    else:
-                        year = 1999
-                    date = (year,) + date[1:]
-                    print >> sys.stderr, "Fixing up year '%s' => '%s' for %s" % (msg['Date'], date, fname)
-                '''
                 try:
-                    timestamp = mktime_tz(date)
-                    os.utime(fname, (timestamp, timestamp))
-                except ValueError:
-                    print >> sys.stderr, "Invalid date '%s' for %s: %s" % (msg['Date'], fname, date)
-            else:
-                print >> sys.stderr, "Could not parse date '%s' for %s" % (msg['Date'], fname)
-        else:
-            print >> sys.stderr, 'No Date header in %s' % (fname)
+                    new_timestamp = mktime_tz(date)
+                    old_timestamp = re.search(r'(?:cur\/)(\d+)', fname).group(1)
+                    new_filename = fname.replace(old_timestamp, str(new_timestamp))
 
-def crawlDir(dname):
+                    if str(new_timestamp) not in fname:
+                        os.utime(fname, (new_timestamp, new_timestamp))
+                        os.rename(fname, new_filename)
+                except (ValueError, AttributeError):
+                    logging.warning("Invalid date '%s' for %s: %s" % (msg['Date'], fname, date))
+            else:
+                logging.warning("Could not parse date '%s' for %s" % (msg['Date'], fname))
+        else:
+            logging.warning('No Date header in %s' % (fname))
+
+
+def crawl_dir(dname):
+    """ Recursively crawl the directory """
     try:
         for fname in os.listdir(dname):
             if fname == 'cur':
                 try:
                     os.remove(os.path.join(dname, 'dovecot.index.cache'))
-                except OSError as e:
-                    if e.errno != 2:
+                except OSError as exc:
+                    if exc.errno != 2:
                         raise
-                fixDir(os.path.join(dname, fname))
+                fix_dir(os.path.join(dname, fname))
             else:
-                crawlDir(os.path.join(dname, fname))
-    except OSError as e:
-        if e.errno != 20 and e.errno != 2:
+                crawl_dir(os.path.join(dname, fname))
+    except OSError as exc:
+        if exc.errno != 20 and exc.errno != 2:
             raise
 
+
 def main(argv):
+    """ Run the fixer """
     if len(argv) != 1:
-        print 'Usage: fixmaildate.py <startdir>'
+        logging.error('Usage: fixmaildate.py <startdir>')
         sys.exit(1)
-    crawlDir(argv[0])
+    crawl_dir(argv[0])
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])
